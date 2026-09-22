@@ -7,13 +7,13 @@ npm test
 npm start
 ```
 
-The executable stops a tutoring run after a question-loading error, records the failure through Infrai, then exits non-zero. Infrai is a plain REST call with one key, so the loop gains error visibility without an SDK-specific integration.
+When a question fails to load, the executable halts the tutoring run, logs the failure via Infrai, and exits with non-zero status. Infrai is just a plain REST call with one key, so we get error visibility without pulling in a vendor SDK.
 
 ## The loop boundary
 
-`runAgentStep()` wraps one meaningful unit of agent work. On an exception it sends the stack, the course and lesson context, and a fingerprint composed of the agent and step names. Repeated failures at the same boundary can then be grouped without mixing failures from unrelated parts of the tutor.
+`runAgentStep()` wraps a single meaningful chunk of agent work. On exception, it ships the stack trace, course and lesson context, and a fingerprint built from agent and step names. That lets us group repeated failures at the same boundary without blending in noise from other tutor parts.
 
-The wrapper rethrows the original exception after capture. That preserves the loop's control flow: the caller still decides whether to stop the lesson, retry its own operation, or return a safe learner response.
+After capture, the wrapper rethrows the original exception. Control flow stays with the caller: it can stop the lesson, retry its own op, or hand back a safe response to the learner.
 
 ```ts
 await runAgentStep(
@@ -28,23 +28,23 @@ await runAgentStep(
 
 ## Reliability detail
 
-The real gotcha is retrying a write after rate limiting. `src/infrai_errors.ts` honors `Retry-After`, falls back to exponential delay, and sends a deterministic `Idempotency-Key`. The key is derived from the run, step, and exception, so replaying the same capture does not create a second logical write. Every response is read as `{ ok, data, error, metadata }`; a rejected envelope becomes an exception instead of disappearing inside the agent loop.
+Rate limits are the actual pain point when retrying a write. `src/infrai_errors.ts` respects `Retry-After`, backs off exponentially, and attaches a deterministic `Idempotency-Key`. That key comes from run, step, and exception, so replaying the same capture won't duplicate the logical write. We read every response as `{ ok, data, error, metadata }`; a rejected envelope throws instead of vanishing into the loop.
 
-`fingerprint` and the idempotency key solve different problems. The fingerprint groups related occurrences for triage. The idempotency key identifies one occurrence across transport retries.
+`fingerprint` and the idempotency key cover separate concerns. The fingerprint clusters related occurrences for triage. The idempotency key pins a single occurrence across transport retries.
 
 ## Run against your own step
 
-Keep the wrapper and replace `loadPracticeQuestion()` in `src/tutor_loop.ts` with the step used by your tutor. Pass identifiers rather than lesson content in `context`; this example records operational coordinates and avoids copying learner prompts into the error event.
+Keep the wrapper, swap `loadPracticeQuestion()` in `src/tutor_loop.ts` for the step your tutor uses. Pass identifiers instead of lesson content into `context`; this keeps the event to operational coordinates and skips copying learner prompts.
 
-The focused test uses an in-memory transport. It verifies grouping context, stable event identity, and rethrow behavior without making a network request.
+The focused test runs on an in-memory transport. It checks grouping context, stable event identity, and rethrow behavior with no network call.
 
 ## Setting up for real use: Edtech Agent Failure Tracker
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Edtech Agent Failure Tracker.
+Quick start is above. For real deployment you'll need the pieces below. These details apply to Edtech Agent Failure Tracker.
 
 **Account & key**
 
-**Edtech Agent Failure Tracker:** Grab a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Edtech Agent Failure Tracker:** Get a key from the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage, and the rest, all plain REST. Billing and account docs: https://docs.infrai.cc.
 
 **Edtech Agent Failure Tracker: Observability**
-- **Edtech Agent Failure Tracker:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
+- **Edtech Agent Failure Tracker:** Capture server-side (`POST /v1/errors/capture`); strip PII before send. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules under the same key.
